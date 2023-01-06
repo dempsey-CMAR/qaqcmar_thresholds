@@ -7,6 +7,7 @@ library(sensorstrings)
 library(stringr)
 library(qaqcmar)
 library(tidyr)
+library(purrr)
 
 deployment <- "Borgles Island 2019-05-30"
 
@@ -56,11 +57,6 @@ ui <- fluidPage(
 
             selectInput("qc_test", "QC Test", choices = qc_tests),
 
-            conditionalPanel(
-              condition = "input.qc_test == 'grossrange'",
-              checkboxGroupInput("sensors", "Sensor(s)", choices = sensors)
-            ),
-
             uiOutput("sensor_boxes"),
             uiOutput("dynamic_ui")
         ),
@@ -72,23 +68,30 @@ ui <- fluidPage(
     )
 )
 
-# Define server logic required to draw a histogram
+
 server <- function(input, output) {
 
   output$sensor_boxes <- renderUI({
 
-    sensors <- dat %>%
-      ss_pivot_longer() %>%
-      filter(variable == input$variable) %>%
-      distinct(sensor_type) %>%
-      arrange()
+    if (input$qc_test == "grossrange") {
+      sensors <- dat %>%
+        ss_pivot_longer() %>%
+        filter(variable == input$variable) %>%
+        distinct(sensor_type) %>%
+        arrange()
 
-    checkboxGroupInput("sensors", "Sensor(s)", choices = sensors$sensor_type)
+      checkboxGroupInput(
+        "sensors", "Sensor(s)",
+        choices = sensors$sensor_type,
+        selected = sensors$sensor_type
+      )
+    }
   })
 
   output$dynamic_ui <- renderUI({
-   # req(mydata3)
+    # req(mydata3)
 
+    # something going wrong with filtering - might need to change this
     thresh_display <- thresholds %>%
       filter(
         qc_test == input$qc_test,
@@ -96,29 +99,20 @@ server <- function(input, output) {
         sensor_type %in% input$sensors
       )
 
-    selectInput("check", label = "check", choices = thresh_display$value)
-  })
+    ui_elems <- list(NULL)
+    for (i in seq_along(1:nrow(thresh_display))) {
 
-    # ui_elems <- purrr::map(my_cols, ~{
-    #   if (class(mydata3[[.x]]) %in% c("factor", "character")){
-    #     output <- textInput(
-    #       inputId = paste("input", .x, sep = "_"),
-    #       label = .x,
-    #       value = NULL
-    #     )
-    #   } else if (class(mydata3[[.x]]) %in% c("integer", "numeric")){
-    #     output <- numericInput(
-    #       inputId = paste("input", .x, sep = "_"),
-    #       label = .x,
-    #       value = NULL
-    #     )
-    #   } else output <- NULL
-    #
-    #   return(output)
-    # })
-    #
-    # return(tagList(ui_elems))
- # })
+      ui_elems[[i]] <- numericInput(
+        thresh_display$threshold[i],
+        thresh_display$threshold[i],
+        value = thresh_display$value[i]
+      )
+    }
+
+    return(tagList(ui_elems))
+
+    # selectInput("check", label = "check", choices = thresh_display$value)
+  })
 
     output$distPlot <- renderPlot({
         # generate bins based on input$bins from ui.R
@@ -130,6 +124,8 @@ server <- function(input, output) {
              xlab = 'Waiting time to next eruption (in mins)',
              main = 'Histogram of waiting times')
     })
+
+
 }
 
 # Run the application
