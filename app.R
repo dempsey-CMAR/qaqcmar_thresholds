@@ -1,3 +1,4 @@
+# https://community.rstudio.com/t/creating-multiple-numeric-input-according-to-the-variables-of-an-uploaded-dataset/12293
 
 library(data.table)
 library(dplyr)
@@ -7,7 +8,7 @@ library(sensorstrings)
 library(stringr)
 library(qaqcmar)
 library(tidyr)
-library(purrr)
+
 
 deployment <- "Borgles Island 2019-05-30"
 
@@ -31,7 +32,7 @@ thresholds <- threshold_tables$climatology_table %>%
   bind_rows(
     threshold_tables$grossrange_table %>%
       pivot_longer(cols = sensor_min:user_max, names_to = "threshold") %>%
-      mutate(qc_test = "grossrange")
+      mutate(qc_test = "grossrange", threshold = paste0(sensor_type, "_", threshold))
   ) %>% bind_rows(
     threshold_tables$spike_table %>%
       pivot_longer(cols = c("spike_high", "spike_low"), names_to = "threshold") %>%
@@ -39,33 +40,41 @@ thresholds <- threshold_tables$climatology_table %>%
   )
 
 
-
-
 #dat_qc <- qc_test_all(dat)
 
 
-# Define UI for application that draws a histogram
+# Define UI
 ui <- fluidPage(
 
-    # Application title
-    titlePanel("Quality Control"),
+  # Application title
+  titlePanel("Quality Control"),
 
-    # Sidebar with a slider input for number of bins
-    sidebarLayout(
-        sidebarPanel(
-            selectInput("variable", "Variable", choices = vars$variable),
+  # Sidebar with a slider input for number of bins
+  sidebarLayout(
+    sidebarPanel(
+      style = "height: 90vh; overflow-y: auto;",
 
-            selectInput("qc_test", "QC Test", choices = qc_tests),
+      actionButton(
+        "qc_plot", "Apply Flags", icon("flag"),
+        style="color: #fff; background-color: #337ab7; border-color: #2e6da4"),
+      br(),
+      br(),
 
-            uiOutput("sensor_boxes"),
-            uiOutput("dynamic_ui")
-        ),
+      selectInput("variable", "Variable", choices = vars$variable),
 
-        # Show a plot of the generated distribution
-        mainPanel(
-           plotOutput("distPlot")
-        )
-    )
+      selectInput("qc_test", "QC Test", choices = qc_tests),
+
+      uiOutput("sensor_boxes"),
+      uiOutput("dynamic_ui")
+    ),
+
+    # Show a plot of the generated distribution
+    mainPanel(
+      plotOutput("distPlot")
+    ),
+
+    fluid = TRUE
+  )
 )
 
 
@@ -89,42 +98,62 @@ server <- function(input, output) {
   })
 
   output$dynamic_ui <- renderUI({
-    # req(mydata3)
 
-    # something going wrong with filtering - might need to change this
+    # filter for thresholds of interest
     thresh_display <- thresholds %>%
-      filter(
-        qc_test == input$qc_test,
-        variable == input$variable,
-        sensor_type %in% input$sensors
-      )
+      filter(qc_test == input$qc_test, variable == input$variable)
 
+    if (input$qc_test == "grossrange") {
+      thresh_display <- filter(thresh_display, sensor_type %in% input$sensors)
+    }
+
+    # make numeric inputs for thresholds of interest
     ui_elems <- list(NULL)
-    for (i in seq_along(1:nrow(thresh_display))) {
+    for (i in 1:nrow(thresh_display)) {
 
       ui_elems[[i]] <- numericInput(
-        thresh_display$threshold[i],
-        thresh_display$threshold[i],
-        value = thresh_display$value[i]
+        inputId = thresh_display$threshold[i],
+        label = thresh_display$threshold[i],
+        value = thresh_display$value[i],
+        width = '50%'
       )
     }
 
-    return(tagList(ui_elems))
+    # make a grid layout for the threshold input boxes
+    fluidPage(
 
-    # selectInput("check", label = "check", choices = thresh_display$value)
+      ui_grid <- list(NULL),
+
+      fluidRow(
+
+        for(j in seq(1, length(ui_elems), 2)) {
+
+          ui_grid[[j]] <- column(6, ui_elems[[j]], ui_elems[[j+1]])
+
+        }
+      ),
+
+      return(tagList(ui_grid))
+    )
+
+    I# uncomment this if decide to not use the grid layout
+    # return(tagList(ui_elems))
   })
 
-    output$distPlot <- renderPlot({
-        # generate bins based on input$bins from ui.R
-        x    <- faithful[, 2]
-        bins <- seq(min(x), max(x))
 
-        # draw the histogram with the specified number of bins
-        hist(x, breaks = bins, col = 'darkgray', border = 'white',
-             xlab = 'Waiting time to next eruption (in mins)',
-             main = 'Histogram of waiting times')
+  observeEvent(input$qc_plot, {
+
+    output$distPlot <-  renderPlot({
+      # generate bins based on input$bins from ui.R
+      x    <- faithful[, 2]
+      bins <- seq(min(x), max(x), length.out = runif(30, 1, 30)[1])
+
+      # draw the histogram with the specified number of bins
+      hist(x, breaks = bins, col = 'darkgray', border = 'white',
+           xlab = 'Waiting time to next eruption (in mins)',
+           main = 'Histogram of waiting times')
     })
-
+  })
 
 }
 
