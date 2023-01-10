@@ -2,7 +2,9 @@
 
 library(data.table)
 library(dplyr)
+library(DT)
 library(here)
+library(purrr)
 library(shiny)
 library(sensorstrings)
 library(stringr)
@@ -25,7 +27,7 @@ qc_tests <- c("climatology", "grossrange", "spike")
 
 #sensors <- sort(unique(dat$sensor_type))
 
-thresh_all <- threshold_tables$climatology_table %>%
+thresh_default_all <- threshold_tables$climatology_table %>%
   pivot_longer(cols = c("season_min", "season_max"), names_to = "threshold") %>%
   mutate(threshold = str_remove(threshold, pattern = "season_"),
          threshold = paste(season, threshold, sep = "_")) %>%
@@ -50,7 +52,8 @@ thresh_all <- threshold_tables$climatology_table %>%
 #dat_qc <- qc_test_all(dat)
 
 
-# Define UI
+
+# user interface ----------------------------------------------------------
 ui <- fluidPage(
 
   # Application title
@@ -77,28 +80,29 @@ ui <- fluidPage(
 
     # Show a plot of the generated distribution
     mainPanel(
-      plotOutput("distPlot")
+      DTOutput("thresh_final")
     ),
 
+    # for reactive numeric inputs (for thresholds)
     fluid = TRUE
   )
 )
 
 
+# server -----------------------------------------------------------------
 server <- function(input, output) {
 
   # reactive values
-  thresh <- reactive({
+  thresh_default <- reactive({
     # filter for thresholds of interest
-    thresh <- thresh_all %>%
+    thresh_default <- thresh_default_all %>%
       filter(qc_test == input$qc_test, variable == input$variable)
 
     if (input$qc_test == "grossrange") {
-      thresh <- filter(thresh, sensor_type %in% input$sensors)
+      thresh_default <- filter(thresh_default, sensor_type %in% input$sensors)
     }
 
-    return(thresh)
-
+    return(thresh_default)
   })
 
   # reactive user interface
@@ -128,12 +132,12 @@ server <- function(input, output) {
 
     # make numeric inputs for thresholds of interest
     ui_elems <- list(NULL)
-    for (i in 1:nrow(thresh())) {
+    for (i in 1:nrow(thresh_default())) {
 
       ui_elems[[i]] <- numericInput(
-        inputId = thresh()$threshold[i],
-        label = thresh()$threshold[i],
-        value = thresh()$value[i],
+        inputId = thresh_default()$threshold[i],
+        label = thresh_default()$threshold[i],
+        value = thresh_default()$value[i],
         width = '50%'
       )
     }
@@ -145,6 +149,8 @@ server <- function(input, output) {
 
       fluidRow(
 
+        # might be able to change the order by filling in the left col
+        # and then the right by making the indices with seq
         for(j in seq(1, length(ui_elems), 2)) {
 
           ui_grid[[j]] <- column(6, ui_elems[[j]], ui_elems[[j+1]])
@@ -160,19 +166,68 @@ server <- function(input, output) {
   })
 
 
+  # make a table of default and user-input threshold values to use for qc flag
+  thresh_qc <- eventReactive(input$qc_plot, {
+
+    thresh_inc <- thresh_default()$threshold # thresholds included
+
+    thresh_input <- list(NULL)
+    for (k in seq_along(thresh_inc)) {
+
+      thresh_input[[k]] <- data.frame(
+        threshold = thresh_inc[k],      # threshold name
+        value = input[[thresh_inc[k]]]  # input value
+      )
+    }
+
+    thresh_qc <- map_df(thresh_input, rbind)
+
+    return(thresh_qc)
+  })
+
+
   observeEvent(input$qc_plot, {
 
-    output$distPlot <-  renderPlot({
-      # generate bins based on input$bins from ui.R
-      x    <- faithful[, 2]
-      bins <- seq(min(x), max(x), length.out = runif(30, 1, 30)[1])
-
-      # draw the histogram with the specified number of bins
-      hist(x, breaks = bins, col = 'darkgray', border = 'white',
-           xlab = 'Waiting time to next eruption (in mins)',
-           main = 'Histogram of waiting times')
+    output$thresh_final <- renderDT({
+      datatable(thresh_qc())
     })
   })
+
+  # observeEvent(input$qc_plot, {
+  #
+  #  x <- thresh %>%
+  #     mutate(threshold = str_remove(threshold, "am_|hobo_|vr2ar_")) %>%
+  #     pivot_wider(names_from = "threshold", values_from = "value")
+  #
+  #  dat_qc <- dat %>%
+  #    qc_test_all(
+  #      qc_tests = input$qc_test,
+  #
+  #
+  #
+  #
+  #      )
+  #
+  #
+  #
+  #
+  #
+  # })
+
+
+  # observeEvent(input$qc_plot, {
+  #
+  #   output$distPlot <-  renderPlot({
+  #     # generate bins based on input$bins from ui.R
+  #     x    <- faithful[, 2]
+  #     bins <- seq(min(x), max(x), length.out = runif(30, 1, 30)[1])
+  #
+  #     # draw the histogram with the specified number of bins
+  #     hist(x, breaks = bins, col = 'darkgray', border = 'white',
+  #          xlab = 'Waiting time to next eruption (in mins)',
+  #          main = 'Histogram of waiting times')
+  #   })
+  # })
 
 }
 
