@@ -10,6 +10,7 @@ library(sensorstrings)
 library(stringr)
 library(qaqcmar)
 library(tidyr)
+library(plotly)
 
 
 # perhaps move this to script in /R folder --------------------------------
@@ -26,38 +27,13 @@ vars <- dat %>%
 qc_tests <- c("climatology", "grossrange", "spike")
 
 
-# gr_table <- threshold_tables %>%
-#   filter(qc_test == "grossrange") %>%
-#   select(-qc_test, -season) %>%
-#   mutate(threshold = str_remove(threshold, "am_|hobo_|vr2ar_")) %>%
-#   pivot_wider(names_from = "threshold", values_from = "threshold_value")
-#
-# cl_table <- threshold_tables %>%
-#   filter(qc_test == "climatology") %>%
-#   select(-qc_test, -sensor_type) %>%
-#   mutate(
-#     threshold = str_replace(threshold, "winter|spring|summer|fall", "season")
-#   ) %>%
-#   pivot_wider(names_from = "threshold", values_from = "threshold_value")
-#
-# dat_qc <-  dat %>%
-#   qc_test_all(
-#     qc_tests = "grossrange",
-#     climatology_table = cl_table,
-#     grossrange_table = gr_table
-#     # seasons_table = qaqcmar::threshold_tables$seasons_table
-#   )
-#
-#
-
-
 # user interface ----------------------------------------------------------
 ui <- fluidPage(
 
   # Application title
   titlePanel("Quality Control"),
 
-  # Sidebar with a slider input for number of bins
+  # Reactive sidebar
   sidebarLayout(
     sidebarPanel(
       style = "height: 90vh; overflow-y: auto;",
@@ -76,26 +52,25 @@ ui <- fluidPage(
       uiOutput("thresh_ui")
     ),
 
-    # Show a plot of the generated distribution
-    mainPanel(
+    # for reactive numeric inputs (for thresholds)
+    fluid = TRUE,
 
+    # Main panels
+    mainPanel(
       tabsetPanel(
         type = "tabs",
+        tabPanel("QC Plot", plotlyOutput("qc_flags")),
         tabPanel("Threshold Table", DTOutput("qc_thresh_table")),
         tabPanel("QC Data", DTOutput("qc_dat"))
       )
-    ),
-
-    # for reactive numeric inputs (for thresholds)
-    fluid = TRUE
+    )
   )
 )
-
 
 # server -----------------------------------------------------------------
 server <- function(input, output) {
 
-  # reactive values
+  # default threshold values
   thresh_default <- reactive({
     # filter for thresholds of interest
     thresh_default <- threshold_tables %>%
@@ -108,7 +83,7 @@ server <- function(input, output) {
     return(thresh_default)
   })
 
-  # reactive user interface
+  # provide check boxes to select sensor(s) of interest, if threshold depends on sensor
   output$sensor_ui <- renderUI({
 
     if (input$qc_test == "grossrange") {
@@ -126,14 +101,16 @@ server <- function(input, output) {
     }
   })
 
+  # provide numeric inputs for thresholds of interest
   output$thresh_ui <- renderUI({
 
     validate(
-      need(!(input$variable == "sensor_depth_measured_m" & input$qc_test == "climatology"),
-      "No thresholds available for selected Variable and QC Test")
+      need(!(input$variable == "sensor_depth_measured_m" &
+               input$qc_test == "climatology"),
+           "No thresholds available for selected Variable and QC Test")
     )
 
-    # make numeric inputs for thresholds of interest
+    # make numeric inputs
     ui_elems <- list(NULL)
     for (i in 1:nrow(thresh_default())) {
 
@@ -147,11 +124,8 @@ server <- function(input, output) {
 
     # make a grid layout for the threshold input boxes
     fluidPage(
-
       ui_grid <- list(NULL),
-
       fluidRow(
-
         # might be able to change the order by filling in the left col
         # and then the right by making the indices with seq
         for(j in seq(1, length(ui_elems), 2)) {
@@ -160,12 +134,8 @@ server <- function(input, output) {
 
         }
       ),
-
       return(tagList(ui_grid))
     )
-
-    # uncomment this if decide to not use the grid layout
-    # return(tagList(ui_elems))
   })
 
   # make a table of default and user-input threshold values to use for qc flag
@@ -185,22 +155,24 @@ server <- function(input, output) {
         threshold = str_remove(threshold, "am_|hobo_|vr2ar_")
       )
 
+    # display so can verify that it updates with user inputs
+    output$qc_thresh_table <- ({
+      renderDT({datatable(qc_thresh)})
+    })
 
-    return(qc_thresh)
+    return(qc_thresh) # <- use this table for applying qc flags
   })
 
-  output$qc_thresh_table <- ({
-    renderDT({datatable(qc_thresh())})
-  })
+  # final qc table - display so can verify that it updates with user inputs
+  # updates when "Apply Flags" button is clickec
+  # output$qc_thresh_table <- ({
+  #   renderDT({datatable(qc_thresh())})
+  # })
 
-
+  # apply flags to data
   observeEvent(input$qc_plot, {
 
-    qc_thresh <- qc_thresh() #%>%
-      # mutate(
-      #   threshold = str_replace(threshold, "winter|spring|summer|fall", "season"),
-      #   threshold = str_remove(threshold, "am_|hobo_|vr2ar_")
-      # )
+    qc_thresh <- qc_thresh()
 
     qc_dat <- dat %>%
       ss_pivot_longer() %>%
@@ -211,27 +183,24 @@ server <- function(input, output) {
         climatology_table = qc_thresh,
         grossrange_table = qc_thresh,
         spike_table = qc_thresh
-    )
+      )
 
     output$qc_dat <- ({
       renderDT({datatable(qc_dat)})
     })
+
+    output$qc_flags <- ({
+      p <- qc_plot_flags(qc_dat, vars = input$variable, qc_tests = input$qc_test)
+      renderPlotly(
+          ggplotly(p[[input$variable]][[input$qc_test]])
+      )
+    })
+
+
   })
 
 
-  # observeEvent(input$qc_plot, {
-  #
-  #   output$distPlot <-  renderPlot({
-  #     # generate bins based on input$bins from ui.R
-  #     x    <- faithful[, 2]
-  #     bins <- seq(min(x), max(x), length.out = runif(30, 1, 30)[1])
-  #
-  #     # draw the histogram with the specified number of bins
-  #     hist(x, breaks = bins, col = 'darkgray', border = 'white',
-  #          xlab = 'Waiting time to next eruption (in mins)',
-  #          main = 'Histogram of waiting times')
-  #   })
-  # })
+
 
 }
 
