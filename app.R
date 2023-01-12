@@ -25,32 +25,30 @@ vars <- dat %>%
 
 qc_tests <- c("climatology", "grossrange", "spike")
 
-#sensors <- sort(unique(dat$sensor_type))
 
-thresh_default_all <- threshold_tables$climatology_table %>%
-  pivot_longer(cols = c("season_min", "season_max"), names_to = "threshold") %>%
-  mutate(threshold = str_remove(threshold, pattern = "season_"),
-         threshold = paste(season, threshold, sep = "_")) %>%
-  mutate(qc_test = "climatology") %>%
-  select(-season) %>%
-  bind_rows(
-    threshold_tables$grossrange_table %>%
-      pivot_longer(cols = sensor_min:user_max, names_to = "threshold") %>%
-      mutate(
-        sensor_type = if_else(sensor_type == "vemco", "vr2ar", sensor_type),
-        qc_test = "grossrange", threshold = paste0(sensor_type, "_", threshold),
-        threshold = str_replace(threshold, "aquameasure", "am")
-      )
-  ) %>% bind_rows(
-    threshold_tables$spike_table %>%
-      pivot_longer(cols = c("spike_high", "spike_low"), names_to = "threshold") %>%
-      mutate(qc_test = "spike")
-  ) %>%
-  mutate(sensor_type = if_else(sensor_type == "vemco", "vr2ar", sensor_type))
-
-
-#dat_qc <- qc_test_all(dat)
-
+# gr_table <- threshold_tables %>%
+#   filter(qc_test == "grossrange") %>%
+#   select(-qc_test, -season) %>%
+#   mutate(threshold = str_remove(threshold, "am_|hobo_|vr2ar_")) %>%
+#   pivot_wider(names_from = "threshold", values_from = "threshold_value")
+#
+# cl_table <- threshold_tables %>%
+#   filter(qc_test == "climatology") %>%
+#   select(-qc_test, -sensor_type) %>%
+#   mutate(
+#     threshold = str_replace(threshold, "winter|spring|summer|fall", "season")
+#   ) %>%
+#   pivot_wider(names_from = "threshold", values_from = "threshold_value")
+#
+# dat_qc <-  dat %>%
+#   qc_test_all(
+#     qc_tests = "grossrange",
+#     climatology_table = cl_table,
+#     grossrange_table = gr_table
+#     # seasons_table = qaqcmar::threshold_tables$seasons_table
+#   )
+#
+#
 
 
 # user interface ----------------------------------------------------------
@@ -80,7 +78,12 @@ ui <- fluidPage(
 
     # Show a plot of the generated distribution
     mainPanel(
-      DTOutput("thresh_final")
+
+      tabsetPanel(
+        type = "tabs",
+        tabPanel("Threshold Table", DTOutput("qc_thresh_table")),
+        tabPanel("QC Data", DTOutput("qc_dat"))
+      )
     ),
 
     # for reactive numeric inputs (for thresholds)
@@ -95,7 +98,7 @@ server <- function(input, output) {
   # reactive values
   thresh_default <- reactive({
     # filter for thresholds of interest
-    thresh_default <- thresh_default_all %>%
+    thresh_default <- threshold_tables %>%
       filter(qc_test == input$qc_test, variable == input$variable)
 
     if (input$qc_test == "grossrange") {
@@ -137,7 +140,7 @@ server <- function(input, output) {
       ui_elems[[i]] <- numericInput(
         inputId = thresh_default()$threshold[i],
         label = thresh_default()$threshold[i],
-        value = thresh_default()$value[i],
+        value = thresh_default()$threshold_value[i],
         width = '50%'
       )
     }
@@ -165,54 +168,55 @@ server <- function(input, output) {
     # return(tagList(ui_elems))
   })
 
-
   # make a table of default and user-input threshold values to use for qc flag
-  thresh_qc <- eventReactive(input$qc_plot, {
+  qc_thresh <- eventReactive(input$qc_plot, {
 
-    thresh_inc <- thresh_default()$threshold # thresholds included
+    qc_thresh <- thresh_default()
 
-    thresh_input <- list(NULL)
-    for (k in seq_along(thresh_inc)) {
+    for (k in 1:nrow(qc_thresh)) {
 
-      thresh_input[[k]] <- data.frame(
-        threshold = thresh_inc[k],      # threshold name
-        value = input[[thresh_inc[k]]]  # input value
-      )
+      qc_thresh$threshold_value[k] <- input[[qc_thresh$threshold[k]]]
     }
 
-    thresh_qc <- map_df(thresh_input, rbind)
+    # for joining with dat
+    qc_thresh <- qc_thresh %>%
+      mutate(
+        threshold = str_replace(threshold, "winter|spring|summer|fall", "season"),
+        threshold = str_remove(threshold, "am_|hobo_|vr2ar_")
+      )
 
-    return(thresh_qc)
+
+    return(qc_thresh)
+  })
+
+  output$qc_thresh_table <- ({
+    renderDT({datatable(qc_thresh())})
   })
 
 
   observeEvent(input$qc_plot, {
 
-    output$thresh_final <- renderDT({
-      datatable(thresh_qc())
+    qc_thresh <- qc_thresh() #%>%
+      # mutate(
+      #   threshold = str_replace(threshold, "winter|spring|summer|fall", "season"),
+      #   threshold = str_remove(threshold, "am_|hobo_|vr2ar_")
+      # )
+
+    qc_dat <- dat %>%
+      ss_pivot_longer() %>%
+      filter(variable == input$variable) %>%
+      ss_pivot_wider() %>%
+      qc_test_all(
+        qc_tests = input$qc_test,
+        climatology_table = qc_thresh,
+        grossrange_table = qc_thresh,
+        spike_table = qc_thresh
+    )
+
+    output$qc_dat <- ({
+      renderDT({datatable(qc_dat)})
     })
   })
-
-  # observeEvent(input$qc_plot, {
-  #
-  #  x <- thresh %>%
-  #     mutate(threshold = str_remove(threshold, "am_|hobo_|vr2ar_")) %>%
-  #     pivot_wider(names_from = "threshold", values_from = "value")
-  #
-  #  dat_qc <- dat %>%
-  #    qc_test_all(
-  #      qc_tests = input$qc_test,
-  #
-  #
-  #
-  #
-  #      )
-  #
-  #
-  #
-  #
-  #
-  # })
 
 
   # observeEvent(input$qc_plot, {
