@@ -12,20 +12,7 @@ library(qaqcmar)
 library(tidyr)
 library(plotly)
 
-
-# perhaps move this to script in /R folder --------------------------------
-
-deployment <- "Borgles Island 2019-05-30"
-
-dat <- fread(paste0(here("data"), "/", deployment, ".csv"))
-
-vars <- dat %>%
-  ss_pivot_longer() %>%
-  distinct(variable) %>%
-  arrange(variable)
-
 qc_tests <- c("climatology", "grossrange", "spike")
-
 
 # user interface ----------------------------------------------------------
 ui <- fluidPage(
@@ -44,7 +31,10 @@ ui <- fluidPage(
       br(),
       br(),
 
-      selectInput("variable", "Variable", choices = vars$variable),
+      selectInput("depl", "Deployment", choices = list.files(here("data"))),
+
+      #selectInput("variable", "Variable", choices = vars$variable),
+      uiOutput("variables_ui"),
 
       selectInput("qc_test", "QC Test", choices = qc_tests),
 
@@ -59,7 +49,11 @@ ui <- fluidPage(
     mainPanel(
       tabsetPanel(
         type = "tabs",
-        tabPanel("QC Plot", plotlyOutput("qc_flags")),
+        tabPanel("QC Plot", plotOutput("qc_flags", height = 600)),
+        tabPanel(
+          "Interactive QC Plot",
+          plotlyOutput("qc_flags_interactive", height = 600)
+        ),
         tabPanel("Threshold Table", DTOutput("qc_thresh_table")),
         tabPanel("QC Data", DTOutput("qc_dat"))
       )
@@ -70,25 +64,26 @@ ui <- fluidPage(
 # server -----------------------------------------------------------------
 server <- function(input, output) {
 
-  # default threshold values
-  thresh_default <- reactive({
-    # filter for thresholds of interest
-    thresh_default <- threshold_tables %>%
-      filter(qc_test == input$qc_test, variable == input$variable)
 
-    if (input$qc_test == "grossrange") {
-      thresh_default <- filter(thresh_default, sensor_type %in% input$sensors)
-    }
+  # UI elements -------------------------------------------------------------
 
-    return(thresh_default)
+  # variables dropdown
+  output$variables_ui <- renderUI({
+
+    vars <- dat() %>%
+      # ss_pivot_longer() %>%
+      distinct(variable) %>%
+      arrange(variable)
+
+    selectInput("variable", "Variable", choices = vars$variable)
   })
 
   # provide check boxes to select sensor(s) of interest, if threshold depends on sensor
   output$sensor_ui <- renderUI({
 
     if (input$qc_test == "grossrange") {
-      sensors <- dat %>%
-        ss_pivot_longer() %>%
+      sensors <- dat() %>%
+        # ss_pivot_longer() %>%
         filter(variable == input$variable) %>%
         distinct(sensor_type) %>%
         arrange()
@@ -110,7 +105,7 @@ server <- function(input, output) {
            "No thresholds available for selected Variable and QC Test")
     )
 
-    # make numeric inputs
+    # make numeric input boxes
     ui_elems <- list(NULL)
     for (i in 1:nrow(thresh_default())) {
 
@@ -122,12 +117,11 @@ server <- function(input, output) {
       )
     }
 
-    # make a grid layout for the threshold input boxes
+    # grid layout for the threshold input boxes
     fluidPage(
       ui_grid <- list(NULL),
       fluidRow(
-        # might be able to change the order by filling in the left col
-        # and then the right by making the indices with seq
+
         for(j in seq(1, length(ui_elems), 2)) {
 
           ui_grid[[j]] <- column(6, ui_elems[[j]], ui_elems[[j+1]])
@@ -137,6 +131,29 @@ server <- function(input, output) {
       return(tagList(ui_grid))
     )
   })
+
+  # read in data
+  dat <- reactive({
+    #deployment <- input$depl
+    dat <- fread(paste0(here("data"), "/", input$depl)) %>%
+      ss_pivot_longer()
+
+    return(dat)
+  })
+
+  # default threshold values
+  thresh_default <- reactive({
+    # filter for thresholds of interest
+    thresh_default <- threshold_tables %>%
+      filter(qc_test == input$qc_test, variable == input$variable)
+
+    if (input$qc_test == "grossrange") {
+      thresh_default <- filter(thresh_default, sensor_type %in% input$sensors)
+    }
+
+    return(thresh_default)
+  })
+
 
   # make a table of default and user-input threshold values to use for qc flag
   qc_thresh <- eventReactive(input$qc_plot, {
@@ -156,27 +173,33 @@ server <- function(input, output) {
       )
 
     # display so can verify that it updates with user inputs
-    output$qc_thresh_table <- ({
-      renderDT({datatable(qc_thresh)})
-    })
+    output$qc_thresh_table <- ({ renderDT({datatable(qc_thresh) }) })
 
     return(qc_thresh) # <- use this table for applying qc flags
   })
 
-  # final qc table - display so can verify that it updates with user inputs
-  # updates when "Apply Flags" button is clickec
-  # output$qc_thresh_table <- ({
-  #   renderDT({datatable(qc_thresh())})
-  # })
 
   # apply flags to data
   observeEvent(input$qc_plot, {
 
+    validate(
+      need(!(input$variable == "sensor_depth_measured_m" &
+               input$qc_test == "climatology"),
+           "No thresholds available for selected Variable and QC Test")
+    )
+
     qc_thresh <- qc_thresh()
 
-    qc_dat <- dat %>%
-      ss_pivot_longer() %>%
-      filter(variable == input$variable) %>%
+    # quality controlled data
+    qc_dat <- dat() %>%
+      # ss_pivot_longer() %>%
+      filter(variable == input$variable)
+
+    if(input$qc_test == "grossrange") {
+      qc_dat <- qc_dat %>% filter(sensor_type %in% input$sensors)
+    }
+
+    qc_dat <- qc_dat %>%
       ss_pivot_wider() %>%
       qc_test_all(
         qc_tests = input$qc_test,
@@ -185,22 +208,26 @@ server <- function(input, output) {
         spike_table = qc_thresh
       )
 
-    output$qc_dat <- ({
-      renderDT({datatable(qc_dat)})
-    })
+    # figure
+    p <- qc_plot_flags(
+      qc_dat, vars = input$variable, qc_tests = input$qc_test, ncol = 1,
+      flag_title = FALSE
+    )
 
-    output$qc_flags <- ({
-      p <- qc_plot_flags(qc_dat, vars = input$variable, qc_tests = input$qc_test)
-      renderPlotly(
-          ggplotly(p[[input$variable]][[input$qc_test]])
+    p <- p[[input$variable]][[input$qc_test]] +
+      theme(
+        text = element_text(size = 18),
+        strip.text = element_text(size = 14)
       )
-    })
 
+    # outputs
+    output$qc_dat <- ({ renderDT({datatable(qc_dat)}) })
+
+    output$qc_flags <- ({ renderPlot({ p }) })
+
+    output$qc_flags_interactive <- ({ renderPlotly({ ggplotly(p) }) })
 
   })
-
-
-
 
 }
 
