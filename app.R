@@ -33,7 +33,6 @@ ui <- fluidPage(
 
       selectInput("depl", "Deployment", choices = list.files(here("data"))),
 
-      #selectInput("variable", "Variable", choices = vars$variable),
       uiOutput("variables_ui"),
 
       selectInput("qc_test", "QC Test", choices = qc_tests),
